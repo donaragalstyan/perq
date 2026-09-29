@@ -1,0 +1,24 @@
+// perq POC — minimal schema. Throwaway; synthetic data only.
+// The spatial `location geography(Point,4326)` column and its GiST index are managed by a
+// raw SQL migration (migrations/0001_postgis.sql), because Prisma cannot model PostGIS
+// geography types. This mirrors the pattern the real app will use (Prisma + raw SQL).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Business {
+  id       String @id @default(uuid()) @db.Uuid
+  name     String
+  category String
+  city     String
+  country  String @db.Char(2)
+  // location geography(Point,4326) is added via raw SQL migration; not modeled here.
+
+  @@map("businesses")
+}

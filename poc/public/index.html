@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>perq POC — PostGIS + Mapbox</title>
+    <link
+      href="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.css"
+      rel="stylesheet"
+    />
+    <style>
+      html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
+      #map { position: absolute; inset: 0; }
+      #panel {
+        position: absolute; z-index: 1; top: 10px; left: 10px;
+        background: rgba(255,255,255,.92); padding: 10px 12px; border-radius: 8px;
+        max-width: 320px; font-size: 13px; box-shadow: 0 1px 4px rgba(0,0,0,.2);
+      }
+      #panel h1 { font-size: 14px; margin: 0 0 6px; }
+      #status { color: #444; }
+      .warn { color: #a00; }
+      #list { margin: 6px 0 0; padding-left: 16px; max-height: 40vh; overflow:auto; }
+      button { margin-top: 6px; }
+    </style>
+  </head>
+  <body>
+    <div id="panel">
+      <h1>perq POC — synthetic data</h1>
+      <div id="status">Loading…</div>
+      <div>
+        <button data-c="Seattle">Fly to Seattle</button>
+        <button data-c="Prague">Fly to Prague</button>
+      </div>
+      <ul id="list"></ul>
+    </div>
+    <div id="map"></div>
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.js"></script>
+    <script>
+      const CITIES = {
+        Seattle: { center: [-122.3035, 47.6553], zoom: 14 },
+        Prague:  { center: [14.4378, 50.0755],   zoom: 14 },
+      };
+      const statusEl = document.getElementById("status");
+      const listEl = document.getElementById("list");
+      let markers = [];
+
+      function clearMarkers() {
+        markers.forEach((m) => m.remove());
+        markers = [];
+      }
+
+      async function refresh(map) {
+        const b = map.getBounds();
+        const url = `/api/viewport?minLng=${b.getWest()}&minLat=${b.getSouth()}` +
+                    `&maxLng=${b.getEast()}&maxLat=${b.getNorth()}`;
+        const data = await (await fetch(url)).json();
+        clearMarkers();
+        listEl.innerHTML = "";
+        (data.results || []).forEach((biz) => {
+          const marker = new mapboxgl.Marker()
+            .setLngLat([biz.lng, biz.lat])
+            .setPopup(new mapboxgl.Popup().setText(`${biz.name} — ${biz.category}`))
+            .addTo(map);
+          markers.push(marker);
+          const li = document.createElement("li");
+          li.textContent = `${biz.name} — ${biz.category}`;
+          listEl.appendChild(li);
+        });
+        statusEl.textContent =
+          `In view: ${data.count} synthetic businesses (PostGIS ST_MakeEnvelope, re-queried on move).`;
+      }
+
+      async function main() {
+        const cfg = await (await fetch("/api/config")).json();
+        if (!cfg.mapboxToken) {
+          statusEl.innerHTML =
+            '<span class="warn">No MAPBOX_PUBLIC_TOKEN set.</span> ' +
+            "The map needs a token, but the PostGIS query loop still works — " +
+            "see the list below (fetched from /api/viewport).";
+          // Prove the DB loop even without a token, using Seattle's bbox.
+          const b = { minLng: -122.36, minLat: 47.63, maxLng: -122.26, maxLat: 47.69 };
+          const url = `/api/viewport?minLng=${b.minLng}&minLat=${b.minLat}` +
+                      `&maxLng=${b.maxLng}&maxLat=${b.maxLat}`;
+          const data = await (await fetch(url)).json();
+          data.results.forEach((biz) => {
+            const li = document.createElement("li");
+            li.textContent = `${biz.name} — ${biz.category}`;
+            listEl.appendChild(li);
+          });
+          return;
+        }
+
+        mapboxgl.accessToken = cfg.mapboxToken;
+        const map = new mapboxgl.Map({
+          container: "map",
+          style: "mapbox://styles/mapbox/streets-v12",
+          ...CITIES.Seattle,
+        });
+        map.addControl(new mapboxgl.NavigationControl());
+        map.on("load", () => refresh(map));
+        map.on("moveend", () => refresh(map)); // re-query PostGIS on pan/zoom
+
+        document.querySelectorAll("button[data-c]").forEach((btn) => {
+          btn.addEventListener("click", () => map.flyTo(CITIES[btn.dataset.c]));
+        });
+      }
+
+      main().catch((e) => {
+        statusEl.innerHTML = '<span class="warn">Error: ' + e.message + "</span>";
+      });
+    </script>
+  </body>
+</html>

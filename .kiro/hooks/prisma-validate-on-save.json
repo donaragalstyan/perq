@@ -1,0 +1,16 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Prisma schema validation",
+      "trigger": "PostFileSave",
+      "description": "Validates the Prisma schema whenever schema.prisma is saved, catching invalid models/relations before migration.",
+      "matcher": "schema\\.prisma$",
+      "action": {
+        "type": "command",
+        "command": "npx prisma validate",
+        "timeout": 120
+      }
+    }
+  ]
+}

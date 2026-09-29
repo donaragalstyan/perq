@@ -1,0 +1,16 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "TypeScript check on save",
+      "trigger": "PostFileSave",
+      "description": "Runs the TypeScript compiler in no-emit mode when a .ts/.tsx file is saved, so type errors surface immediately.",
+      "matcher": "\\.(ts|tsx)$",
+      "action": {
+        "type": "command",
+        "command": "npm run -s typecheck",
+        "timeout": 120
+      }
+    }
+  ]
+}

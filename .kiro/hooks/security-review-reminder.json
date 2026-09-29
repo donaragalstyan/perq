@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Security review reminder on writes",
+      "trigger": "PreToolUse",
+      "description": "Before file-writing tools run, reminds to check SSRF guards and authz boundaries per security steering when editing fetch/extraction/auth code.",
+      "matcher": "fs_write|str_replace|fs_append",
+      "action": {
+        "type": "agent",
+        "prompt": "If this write touches remote-fetch, AI extraction, auth, or state-transition code, verify it follows .kiro/steering/security.md: SSRF allowlist + private/link-local IP blocking + redirect re-validation + timeout/size caps; authz boundaries (community code cannot set verificationStatus); reporter identity never exposed publicly. If not relevant, proceed without comment."
+      }
+    }
+  ]
+}
