@@ -43,6 +43,18 @@ query. Mapbox handles rendering and client-side clustering only. This keeps the 
 provider swappable (MapLibre GL JS is a drop-in escape hatch) and puts the interesting
 work in the database.
 
+## Place data: Overture (canonical) + Mapbox (rendering)
+
+Real-world place/business records are imported from **Overture Maps Places** (CDLA
+Permissive 2.0) into PostGIS, which is perq's **canonical** place store. **Mapbox is the
+map/rendering layer and optional temporary search only — Mapbox place data is never
+persisted** (its default geocoding forbids storage). Imported places are `source = OVERTURE`
+with the GERS id in `externalPlaceId`; perq's internal `Business.id` is the stable FK target
+for all discount/evidence/community data, so Overture places can be re-synced without
+touching perq's verification history. Three tiers stay separate: SYNTHETIC fixtures (test
+only), OVERTURE places (real), and perq-specific discount/evidence/community data. Details:
+`docs/PLACE_DATA_STRATEGY.md`.
+
 ## Cloud (AWS) choices, and why each is present
 
 This is an AWS hackathon; real cloud is part of the story. But no service is included

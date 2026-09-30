@@ -1,0 +1,22 @@
+# perq — local PostgreSQL + PostGIS for development.
+# Separate from poc/ (which has its own compose + container name).
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: perq-db
+    environment:
+      POSTGRES_USER: perq
+      POSTGRES_PASSWORD: perq
+      POSTGRES_DB: perq
+    ports:
+      - "5433:5432" # host 5433 to avoid clashing with the POC's 5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U perq -d perq"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - perq_pgdata:/var/lib/postgresql/data
+
+volumes:
+  perq_pgdata:

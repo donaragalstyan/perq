@@ -66,8 +66,12 @@ in **PostGIS**, not the map SDK (map provider stays swappable via MapLibre).
   queries. `geography(Point,4326)` + GiST.
 - **Amazon RDS for PostgreSQL** (not Aurora) — identical PostGIS support, simpler, cheaper;
   no scaling/HA need at our scale. Local Docker PostGIS for dev.
-- **Mapbox GL JS** — fast, generous free tier, storable place data (Google forbids
-  persisting most Places data, which fights our PostGIS model), MapLibre escape hatch.
+- **Mapbox GL JS** — map rendering layer only (fast, generous free tier, MapLibre escape
+  hatch). Mapbox place data is NOT persisted (its default geocoding forbids storage).
+- **Overture Maps Places (CDLA Permissive 2.0)** — source for persistent real place records,
+  imported into PostGIS as perq's canonical place store (`source=OVERTURE`, GERS id in
+  `externalPlaceId`). Permissive license, no share-alike; combines cleanly with perq data.
+  See `docs/PLACE_DATA_STRATEGY.md`.
 - **Amazon Cognito** — in-AWS accounts + hosted UI + email verification (needed for
   community-verification integrity). Clerk is the fallback if Cognito blocks week 1.
 - **Amazon Bedrock** — structured extraction only; proposes candidates, never publishes.

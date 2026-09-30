@@ -1,0 +1,225 @@
+// perq — foundation schema (Phase 1).
+//
+// Relational model + enums are managed by Prisma. The spatial column
+// `Business.location geography(Point,4326)` and its GiST index are managed by a raw SQL
+// migration (prisma/migrations/0001_postgis/migration.sql), because Prisma cannot model
+// PostGIS geography types. Spatial reads/writes use raw SQL via the pg pool.
+//
+// Data tiers (see docs/PLACE_DATA_STRATEGY.md):
+//   - SYNTHETIC  : dev/test fixtures only, never production.
+//   - OVERTURE   : imported real places (canonical); GERS id in externalPlaceId.
+//   - MANUAL / AI_CANDIDATE : privileged entry / AI-proposed candidates.
+// perq-specific data (Discount/Evidence/CommunityReport) references the internal Business.id,
+// never externalPlaceId, so Overture places can be re-synced without touching verification data.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums (extensible: add a value without a core-table migration)
+// ---------------------------------------------------------------------------
+
+enum Category {
+  FOOD_DRINK
+  CAFE
+  MUSEUM
+  BOOKS
+  ENTERTAINMENT
+  SHOPPING
+  TRANSPORTATION
+  FITNESS
+  TECHNOLOGY
+  EXPERIENCES
+  OTHER
+}
+
+enum CredentialType {
+  PHYSICAL_STUDENT_ID
+  EDU_EMAIL
+  ANY_UNIVERSITY_ID
+  ISIC
+  UNIDAYS
+  STUDENT_BEANS
+  OTHER
+}
+
+enum DiscountType {
+  PERCENT
+  FIXED
+  SPECIAL_PRICE
+  FREE
+  NONE
+}
+
+enum VerificationStatus {
+  UNCONFIRMED
+  COMMUNITY_VERIFIED
+  OFFICIALLY_VERIFIED
+  NEEDS_REVERIFICATION
+  STALE
+  REJECTED
+}
+
+enum EvidenceType {
+  OFFICIAL_WEBSITE
+  TICKETING_PAGE
+  AI_EXTRACTION
+  COMMUNITY_REPORT
+  RECEIPT_PHOTO
+}
+
+enum BusinessSource {
+  OVERTURE // imported real place (canonical)
+  MANUAL // privileged manual entry
+  AI_CANDIDATE // proposed by AI extraction (later spec)
+  SYNTHETIC // dev/test fixtures only
+}
+
+enum TrustLevel {
+  NORMAL
+  TRUSTED
+  ADMIN
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+model User {
+  id                String           @id @default(uuid()) @db.Uuid
+  authProviderId    String           @unique // Cognito subject; opaque. (Auth is a later spec.)
+  university        String? // private; never exposed via public APIs
+  universityCountry String?          @db.Char(2) // ISO 3166-1 alpha-2; private
+  trustLevel        TrustLevel       @default(NORMAL)
+  createdAt         DateTime         @default(now())
+
+  credentials UserCredential[]
+  reports     CommunityReport[]
+  evidence    Evidence[]
+
+  @@map("users")
+}
+
+model UserCredential {
+  id             String         @id @default(uuid()) @db.Uuid
+  userId         String         @db.Uuid
+  credentialType CredentialType
+  createdAt      DateTime       @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, credentialType]) // self-asserted; no proof stored (MVP)
+  @@map("user_credentials")
+}
+
+model Business {
+  id             String         @id @default(uuid()) @db.Uuid // INTERNAL id: stable FK target
+  externalPlaceId String?       @unique @map("external_place_id") // Overture/GERS id when source=OVERTURE (unique: re-sync match key)
+  name           String
+  category       Category
+  address        String?
+  city           String
+  country        String         @db.Char(2)
+  source         BusinessSource
+  importedAt     DateTime?      @map("imported_at") // when a Tier-2 place was imported/refreshed
+  // location geography(Point,4326) is added by the raw SQL migration; not modeled here.
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  discounts Discount[]
+  reports   CommunityReport[]
+
+  @@index([externalPlaceId]) // match target for Overture re-sync
+  @@index([category])
+  @@map("businesses")
+}
+
+model Discount {
+  id                 String             @id @default(uuid()) @db.Uuid
+  businessId         String             @db.Uuid
+  discountType       DiscountType
+  discountValue      Decimal?           @db.Decimal(10, 2) // percent or amount; null for FREE/NONE
+  currency           String?            @db.Char(3) // required for FIXED/SPECIAL_PRICE
+  acceptedCredentials CredentialType[]
+  restrictions       String?
+  countryRestrictions String[]          @db.Char(2)
+  eligibilityNotes   String?
+  verificationStatus VerificationStatus @default(UNCONFIRMED)
+  confidenceScore    Decimal            @default(0) @db.Decimal(5, 2) // derived; for sorting
+  lastVerifiedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  business    Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  evidence    Evidence[]
+  reports     CommunityReport[]
+  transitions StateTransition[]
+
+  @@index([businessId])
+  @@index([verificationStatus])
+  @@map("discounts")
+}
+
+model Evidence {
+  id              String       @id @default(uuid()) @db.Uuid
+  discountId      String       @db.Uuid
+  evidenceType    EvidenceType
+  sourceUrl       String?
+  sourceSnippet   String? // preserved proof text
+  storageKey      String? // S3 key for uploads (later spec)
+  checkedAt       DateTime
+  createdByUserId String?      @db.Uuid // NEVER exposed by public APIs
+  createdAt       DateTime     @default(now())
+
+  discount  Discount @relation(fields: [discountId], references: [id], onDelete: Cascade)
+  createdBy User?     @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([discountId])
+  @@map("evidence")
+}
+
+model CommunityReport {
+  id                 String       @id @default(uuid()) @db.Uuid
+  businessId         String       @db.Uuid
+  discountId         String?      @db.Uuid // may attach to an existing discount
+  reporterUserId     String       @db.Uuid // used ONLY for uniqueness; never public
+  rawText            String?
+  normalizedType     DiscountType
+  normalizedValue    Decimal?     @db.Decimal(10, 2)
+  normalizedCurrency String?      @db.Char(3)
+  normalizedCredential CredentialType
+  worked             Boolean
+  claimKey           String // derived; deterministic
+  createdAt          DateTime     @default(now())
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  discount Discount? @relation(fields: [discountId], references: [id], onDelete: SetNull)
+  reporter User      @relation(fields: [reporterUserId], references: [id], onDelete: Cascade)
+
+  @@unique([reporterUserId, claimKey]) // one confirmation per account per claim
+  @@index([businessId])
+  @@index([claimKey])
+  @@index([createdAt])
+  @@map("community_reports")
+}
+
+model StateTransition {
+  id         String             @id @default(uuid()) @db.Uuid
+  discountId String             @db.Uuid
+  fromStatus VerificationStatus
+  toStatus   VerificationStatus
+  reason     String
+  createdAt  DateTime           @default(now())
+
+  discount Discount @relation(fields: [discountId], references: [id], onDelete: Cascade)
+
+  @@index([discountId])
+  @@map("state_transitions")
+}

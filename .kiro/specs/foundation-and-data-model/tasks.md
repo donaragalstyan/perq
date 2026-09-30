@@ -24,10 +24,13 @@ Each task references the requirements it satisfies.
 - [ ] 3. Full relational schema in Prisma
   - Model User, UserCredential, Business, Discount, Evidence, CommunityReport,
     StateTransition and all enums.
+  - BusinessSource enum = OVERTURE | MANUAL | AI_CANDIDATE | SYNTHETIC; add `externalPlaceId`
+    (GERS id) + `importedAt` on Business; index `externalPlaceId`. Internal `Business.id` is
+    the FK target for Discount/Evidence/CommunityReport (never `externalPlaceId`).
   - Add uniqueness constraints: `UserCredential(userId, credentialType)`,
     `CommunityReport(reporterUserId, claimKey)`.
   - Reconcile the `location` column between Prisma and the raw SQL migration.
-  - _Requirements: 1, 2, 3, 4, 6.3_
+  - _Requirements: 1, 2, 3, 4, 6.3, 8.4_
 
 - [ ] 4. Normalization + claimKey module (pure, tested)
   - Deterministic parser: rawText -> { normalizedType, value, currency, credential }.
@@ -68,10 +71,18 @@ Each task references the requirements it satisfies.
   - Tests asserting the serialized shape contains no private fields.
   - _Requirements: 4.3, 9.2, 9.3_
 
-- [ ] 10. Seeding split
-  - `prisma/seed/synthetic.ts` (tests/POC, clearly labeled) and `prisma/seed/demo.ts` (real
-    discounts w/ real sourceUrl + snippet + checkedAt only). Demo DB seeded only from demo.ts.
-  - _Requirements: 8.1–8.3_
+- [ ] 10. Seeding split — three tiers
+  - Tier 1 `prisma/seed/synthetic.ts` (`source=SYNTHETIC`, `[SYN]`, tests/POC only).
+  - Tier 2 `prisma/seed/demo-places.ts` (small REAL Overture place set, `source=OVERTURE`,
+    GERS id in `externalPlaceId`, hero cities).
+  - Tier 3 `prisma/seed/demo.ts` (real discounts w/ real sourceUrl + snippet + checkedAt,
+    attached to Tier 2 places by internal `Business.id`).
+  - Demo DB seeded from Tier 2 + Tier 3 only; tiers never mixed. Add CDLA license text to
+    `LICENSES/` and an "Places data © Overture Maps" credit placeholder.
+  - NOTE: the actual Overture *import/ingestion* (bbox extract -> transform -> load) is a
+    FUTURE spec, not part of this foundation spec. Here we only establish the schema, tiers,
+    and a hand-authored small Tier 2 set if needed for early UI work.
+  - _Requirements: 8.1–8.4, 10.1–10.4_
 
 - [ ] 11. Dev log + hooks wiring
   - Start `docs/DEV_LOG.md` capturing meaningful Kiro usage (specs, steering, hooks, changes).

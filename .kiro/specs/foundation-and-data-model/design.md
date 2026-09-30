@@ -40,7 +40,9 @@ VerificationStatus: UNCONFIRMED | COMMUNITY_VERIFIED | OFFICIALLY_VERIFIED |
                     NEEDS_REVERIFICATION | STALE | REJECTED
 EvidenceType:    OFFICIAL_WEBSITE | TICKETING_PAGE | AI_EXTRACTION | COMMUNITY_REPORT |
                  RECEIPT_PHOTO
-BusinessSource:  PROVIDER | MANUAL | AI_CANDIDATE
+BusinessSource:  OVERTURE | MANUAL | AI_CANDIDATE | SYNTHETIC
+                 -- OVERTURE = imported real place (canonical); MANUAL = privileged entry;
+                 -- AI_CANDIDATE = proposed by extraction; SYNTHETIC = dev/test fixtures only
 TrustLevel:      NORMAL | TRUSTED | ADMIN
 ```
 
@@ -65,15 +67,19 @@ UserCredential
   UNIQUE(userId, credentialType)   -- self-asserted, no proof stored (MVP)
 
 Business
-  id (uuid, pk)
-  externalPlaceId?                 -- from map provider; nullable
+  id (uuid, pk)                    -- perq's INTERNAL id; the stable FK target for all
+                                   -- perq-specific data (discounts, evidence, reports).
+                                   -- Never reference a place by externalPlaceId from Tier 3.
+  externalPlaceId?                 -- Overture GERS id when source=OVERTURE; enables re-sync.
   name
   category (Category)
   address?
   city, country (char(2))          -- international-ready
-  source (BusinessSource)
+  source (BusinessSource)          -- OVERTURE (canonical real) | MANUAL | AI_CANDIDATE | SYNTHETIC
   location geography(Point,4326)   -- SQL migration; GiST indexed
+  importedAt?                      -- when Tier 2 place was imported/last refreshed from Overture
   createdAt, updatedAt
+  INDEX(externalPlaceId)           -- match target for Overture re-sync
 
 Discount
   id (uuid, pk)
@@ -156,8 +162,10 @@ UNCONFIRMED ──(privileged: valid official evidence)──▶ OFFICIALLY_VERI
 any state   ──(privileged: valid official evidence)──▶ OFFICIALLY_VERIFIED
 COMMUNITY_VERIFIED ──(conflict threshold met)──▶ NEEDS_REVERIFICATION
 OFFICIALLY_VERIFIED ──(official page changed; later spec)──▶ NEEDS_REVERIFICATION
-NEEDS_REVERIFICATION ──(competing claimKey reaches quorum)──▶ COMMUNITY_VERIFIED (new value)
+NEEDS_REVERIFICATION ──(later re-verification flow: official evidence / future rule)──▶ COMMUNITY_VERIFIED or OFFICIALLY_VERIFIED
 NEEDS_REVERIFICATION ──(no resolution within window)──▶ STALE
+   (Phase 1 flag-first: a competing quorum is recorded as supersede-ELIGIBLE evidence but
+    does NOT itself perform the supersession — resolution is deferred to the re-verify spec.)
 any state   ──(admin)──▶ REJECTED
 
 Visible publicly: COMMUNITY_VERIFIED, OFFICIALLY_VERIFIED (and NEEDS_REVERIFICATION shown
@@ -195,10 +203,18 @@ contradicting = reports for the SAME businessId where
 group contradicting by claimKey (treat all NONE/worked=false as one bucket "NONE")
 pick the largest agreeing bucket
 IF distinct reporterUserId count in that bucket >= 3:
-    transition COMMUNITY_VERIFIED -> NEEDS_REVERIFICATION (reason: "conflict:<newKey>")
-IF that competing bucket's distinct reporters >= 3 AND it is a real discount (not NONE):
-    it may supersede -> COMMUNITY_VERIFIED with the new value (reason: "superseded")
+    transition COMMUNITY_VERIFIED -> NEEDS_REVERIFICATION (reason: "conflict:<competingKey>")
+    record the competing bucket (claimKey + distinct reporter count) as disagreement evidence
+    IF the competing bucket is a real (non-NONE) claim with >= 3 distinct reporters:
+        mark it supersedeEligible = true  (does NOT supersede now — flag-first)
 ```
+
+**Flag-first (decided 2026-09-29).** A conflict always moves the discount to
+NEEDS_REVERIFICATION first. A competing claim reaching quorum becomes *eligible for later
+supersession* but is NOT applied in this phase — so the crowd cannot silently swap the
+displayed value. The pure decision returns `supersede` only as an eligibility signal; the
+service records it (competing claimKey + reporter count) for a future re-verification flow to
+act on. Threshold stays 3 (same as quorum); no separate supersession threshold.
 
 All inputs are counts, dates, and key equality — no scoring, fully testable.
 
@@ -223,15 +239,56 @@ NEEDS_REVERIFICATION)` and never join reporter identity.
    `location geography(Point,4326)`, create the GiST index.
    (`CREATE EXTENSION` requires the `rds_superuser`-granted role on RDS — documented in POC.)
 
-## Seeding split (Requirement 8)
+**Operational gotcha (verified in Phase 1):** `prisma db push` reconciles the DB to the
+Prisma schema and will DROP the raw-SQL-managed `location` column (Prisma doesn't know about
+it). Therefore the spatial migration MUST be re-applied after every `db push`. Use the
+combined `npm run db:sync` (push + re-apply spatial migration) so the geography column and
+GiST index are never left missing.
+
+## Place-data strategy: Overture (canonical places) + Mapbox (rendering)
+
+Per `docs/PLACE_DATA_STRATEGY.md` (decided 2026-09-29):
+
+- **Persistent real places** are imported from **Overture Maps Places** (CDLA Permissive 2.0)
+  into PostGIS, which is perq's **canonical** place store. Rows are marked `source = OVERTURE`
+  with the GERS id in `externalPlaceId` and an `importedAt` timestamp.
+- **Mapbox** is the map/rendering layer (and optional *temporary* search) only. Mapbox place
+  data is never persisted (its default geocoding forbids storage).
+- **Perq's internal `Business.id`** is the stable FK target for all Tier 3 data (discounts,
+  evidence, community reports). Tier 3 never references `externalPlaceId`.
+
+### Refresh safety (Requirement 8.4)
+
+Re-syncing Overture places matches on `externalPlaceId` (GERS) and updates only Tier 2 place
+attributes (name/coords/address/category/`importedAt`). Because Tier 3 references the internal
+`Business.id`, a place refresh leaves discounts/evidence/community reports and verification
+history intact. Import/refresh is a **future spec** (bounded bbox extract via DuckDB /
+`overturemaps` CLI -> transform -> parameterized load); no live crawling.
+
+### Licensing / attribution (Requirement 10)
+
+- Overture Places is **CDLA Permissive 2.0**: no share-alike; the only obligation when
+  redistributing the raw Data is to include the license text (§2.1). CDLA §3.1 ("No
+  Restrictions on Results") means perq's derived Tier 3 data is unencumbered and may be
+  combined freely with place data.
+- Ship the CDLA text in the repo (e.g., `LICENSES/`); show "Places data © Overture Maps" in
+  app credits; keep Mapbox's required map attribution.
+- OSM/ODbL was rejected to avoid share-alike/derivative-database ambiguity; Overture Places is
+  CDLA precisely because it is conflated from permissive commercial sources, not OSM.
+
+## Seeding split — three tiers (Requirement 8)
 
 ```
-prisma/seed/synthetic.ts   -- fake Seattle/Prague points for tests + POC; clearly labeled
-prisma/seed/demo.ts        -- REAL discounts w/ real sourceUrl + snippet + checkedAt only
+prisma/seed/synthetic.ts     -- TIER 1: [SYN] fake points, source=SYNTHETIC; tests + POC only
+prisma/seed/demo-places.ts   -- TIER 2: small REAL Overture place set (source=OVERTURE) for
+                                the hero cities; the future import script feeds this tier
+prisma/seed/demo.ts          -- TIER 3: REAL discounts w/ real sourceUrl + snippet + checkedAt,
+                                attached to Tier 2 places by internal Business.id
 ```
 
-The demo DB is seeded only from `demo.ts`. Tests and the POC use `synthetic.ts`. They are
-never mixed.
+The demo DB is seeded from the Tier 2 + Tier 3 scripts only. Tests and the POC use the Tier 1
+synthetic seed. The tiers are never mixed. (The existing POC `synthetic.ts` remains untouched
+as an isolated validation environment.)
 
 ## Testing (maps to testing steering)
 

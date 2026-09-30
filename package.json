@@ -1,0 +1,44 @@
+{
+  "name": "perq",
+  "version": "0.1.0",
+  "private": true,
+  "description": "perq — student-discount discovery with evidence-grounded trust. Foundation (Phase 1).",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:migrate:spatial": "docker exec -i perq-db psql -U perq -d perq < prisma/migrations/0001_postgis/migration.sql",
+    "db:sync": "prisma db push --skip-generate --accept-data-loss && npm run db:migrate:spatial",
+    "prisma:validate": "prisma validate",
+    "prisma:generate": "prisma generate",
+    "seed:synthetic": "tsx prisma/seed/synthetic.ts",
+    "seed:demo": "tsx prisma/seed/demo-places.ts && tsx prisma/seed/demo.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "next": "^14.2.15",
+    "pg": "^8.13.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^14.2.15",
+    "prisma": "^5.22.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

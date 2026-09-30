@@ -40,10 +40,19 @@ viewport / closest" quickly.
 2. THE system SHALL maintain a GiST index on the business location column.
 3. THE system SHALL store `city` and `country` (ISO 3166) on each business so the schema
    supports international data beyond the hero cities.
-4. WHERE a business originates from a map provider, THE system SHALL store an
-   `externalPlaceId` and a `source` of `PROVIDER`; WHERE entered manually, `source` of
-   `MANUAL`; WHERE proposed by AI extraction, `source` of `AI_CANDIDATE`.
-5. THE system SHALL support the category enum: FOOD_DRINK, CAFE, MUSEUM, BOOKS,
+4. THE system SHALL record each business's `source`: `OVERTURE` (imported from Overture
+   Maps Places — the canonical source for real place records), `MANUAL` (entered by a
+   privileged actor), `AI_CANDIDATE` (proposed by AI extraction), or `SYNTHETIC`
+   (development/test fixtures only — never production/demo).
+5. WHERE a business is imported from Overture Maps, THE system SHALL store the Overture/GERS
+   identifier in `externalPlaceId` so the record can be re-synced later, AND SHALL treat
+   perq's own internal `id` (not `externalPlaceId`) as the stable identifier that all
+   perq-specific data references.
+6. THE system SHALL treat PostGIS as perq's **canonical** place database: once imported, a
+   place is served from perq's own storage and does not require a live third-party call to
+   display. Mapbox is used for map rendering (and optional temporary search), never as the
+   persistent place store.
+7. THE system SHALL support the category enum: FOOD_DRINK, CAFE, MUSEUM, BOOKS,
    ENTERTAINMENT, SHOPPING, TRANSPORTATION, FITNESS, TECHNOLOGY, EXPERIENCES, OTHER.
 
 ### Requirement 2 — Extensible discount records
@@ -146,23 +155,65 @@ discount, so I stop presenting stale information as current.
    NEEDS_REVERIFICATION.
 3. A discount in NEEDS_REVERIFICATION SHALL remain visible but flagged, with a lowered
    confidenceScore for sorting.
-4. WHEN a competing claimKey itself reaches quorum (3 unique accounts) THEN the system MAY
-   supersede the prior claim and return to COMMUNITY_VERIFIED with the new value.
+4. WHEN a conflict trips, THE system SHALL transition the discount to NEEDS_REVERIFICATION
+   **first** (flag-first), and SHALL NOT immediately replace the previously verified claim
+   with the competing claim — even if the competing claim has itself reached the normal
+   3-account quorum. THE system SHALL preserve the competing claim as structured evidence of
+   the disagreement (its `claimKey` and distinct reporter count) so the UI can explain what
+   changed (e.g., "Previously verified: 15% off. Recent reports: 10% off."). A competing claim
+   reaching quorum becomes *eligible for later supersession* but SHALL NOT perform
+   supersession in this phase; a later re-verification flow (official evidence or a future
+   deterministic rule) SHALL define how NEEDS_REVERIFICATION resolves.
 5. Single-account, stale (outside the window), or non-agreeing contradictions SHALL NOT
    trip the transition.
+6. THE conflict threshold SHALL remain 3 (the same value as community quorum). No separate,
+   higher supersession threshold is introduced in this phase.
 
-### Requirement 8 — Separated seeding strategy
+### Requirement 8 — Three data tiers, cleanly separated
 
-**User story:** As the developer, I want real evidence-backed demo data kept separate from
-synthetic test data, so the demo is trustworthy and tests are deterministic.
+**User story:** As the developer, I want synthetic fixtures, imported real place data, and
+perq-specific verification data kept logically separate, so the demo is trustworthy, tests
+are deterministic, and imported place data can be refreshed without touching perq's
+verification history.
+
+The three tiers:
+- **Tier 1 — Synthetic fixtures:** fabricated `[SYN]`-prefixed records, `source = SYNTHETIC`.
+  Development/test only.
+- **Tier 2 — Imported real places:** Overture-derived business records, `source = OVERTURE`,
+  with the GERS id in `externalPlaceId`. Canonical real-world places shown to users.
+- **Tier 3 — perq-specific data:** discounts, evidence, community reports, verification
+  state — produced by perq's own rules, referencing places by perq's internal `id`.
 
 #### Acceptance criteria
-1. THE system SHALL provide a synthetic seed usable by tests and the PostGIS POC, clearly
-   labeled as synthetic.
-2. THE demo/production seed SHALL contain only real student discounts with real evidence
-   (`sourceUrl` + `sourceSnippet` + `checkedAt`) for the hero cities.
-3. Synthetic and real seed data SHALL be in separate scripts/paths and SHALL NOT be mixed
-   in the demo database.
+1. THE system SHALL provide a synthetic seed (Tier 1) usable by tests and the PostGIS POC,
+   clearly labeled `SYNTHETIC`, and SHALL NEVER present Tier 1 data as production/demo data.
+2. THE demo/production place data (Tier 2) SHALL be imported from Overture Maps Places and
+   marked `source = OVERTURE`; the demo/production discounts (Tier 3) SHALL contain only real
+   student discounts with real evidence (`sourceUrl` + `sourceSnippet` + `checkedAt`) for the
+   hero cities.
+3. Tier 1, Tier 2, and Tier 3 SHALL live in separate scripts/paths and SHALL NOT be mixed in
+   the demo database.
+4. THE system SHALL allow Tier 2 (imported place) records to be refreshed/re-synced from
+   Overture (matched by `externalPlaceId`/GERS) WITHOUT deleting or altering Tier 3
+   (discount/evidence/community/verification) data that references a place by perq's internal
+   `id`. Perq's verification history SHALL survive a place refresh.
+
+### Requirement 10 — Place-source provenance and licensing obligations
+
+**User story:** As the system owner, I want provenance and license obligations for imported
+place data recorded, so perq stays compliant and can refresh sources safely.
+
+#### Acceptance criteria
+1. THE system SHALL retain, for each imported place, its `source` and `externalPlaceId`
+   (GERS id) as provenance.
+2. THE application SHALL display attribution for imported place data (e.g., "Places data ©
+   Overture Maps") and SHALL retain the map provider's required attribution (Mapbox) on the
+   map view.
+3. THE repository SHALL include the CDLA Permissive 2.0 license text for the Overture Places
+   data, per its share condition.
+4. Perq-specific data (Tier 3) SHALL NOT be encumbered by the place-source license; combining
+   it with imported place data is permitted (CDLA Permissive "No Restrictions on Results").
+   See `docs/PLACE_DATA_STRATEGY.md`.
 
 ### Requirement 9 — Security and privacy at the data layer
 
