@@ -247,6 +247,37 @@ because of a Kiro conversation.
   quorum, conflict) and privacy-safe queries are implemented and tested. No stretch features
   built. POC remains isolated in poc/.
 
+### 2026-09-29 — auth-and-profile spec: Cognito identity + private profile/credentials
+- Context: add authentication and the perq profile, keeping trust/privacy boundaries.
+- Kiro artifact: auth-and-profile spec (requirements/design/tasks); security + testing steering.
+- Architecture decision: depend on a minimal claims contract behind a `TokenVerifier`
+  interface, NOT the Cognito SDK internals. `AuthClaims{sub,email,emailVerified}` +
+  pure `claimsFromPayload(payload, {issuer,audience,nowMs?})` holds all non-crypto invariants
+  and is unit-tested with no network. `CognitoTokenVerifier` (aws-jwt-verify) does the crypto
+  then delegates to the pure reducer. Clerk fallback = one new adapter, nothing else changes.
+- Concrete outcome:
+  - src/auth/claims.ts (contract + pure reducer, 8 tests: issuer/aud/exp/missing-fields/
+    email_verified string-vs-bool/access-token client_id).
+  - src/auth/cognito.ts (adapter + cognitoVerifierFromEnv).
+  - Schema (additive, backward-compatible): User.email (private) + User.emailVerified
+    (default false). Synced via `npm run db:sync` (which correctly re-applied the spatial
+    migration — the gotcha from Phase 1 held).
+  - src/services/users.ts: provisionUser (idempotent upsert by authProviderId, refreshes
+    emailVerified, stores NO proof) + canContributeCommunityConfirmation = emailVerified.
+  - src/services/profile.ts + credentials.ts: owner-scoped by construction (functions take
+    only the caller userId; no cross-user parameter). Country validation; self-asserted
+    credentials with unique(userId,type); no proof columns.
+  - Privacy regression extended: public-shape forbidden-field scan now includes email +
+    emailVerified. tests/authProfile.integration.test.ts (8) incl. a schema assertion that
+    user_credentials has no proof/scan/photo/document/image column.
+- Cognito assessment: NO blocker. aws-jwt-verify integrated cleanly; the adapter is thin and
+  the testable logic is provider-independent. Did not need the Clerk fallback.
+- Minor decision logged: updateProfile uses COALESCE (set-or-keep) semantics, so passing null
+  does NOT clear a field. Clearing isn't an MVP requirement; documented in the service.
+- Scope held: no hosted-UI theming, session plumbing, geospatial, Mapbox, Bedrock, or Overture
+  ingestion. Those remain later specs.
+- Checks: 81/81 tests pass (was 65); typecheck 0; lint 0; prisma validate OK.
+
 <!-- Add new entries above this line as the project progresses. -->
 ```
 ### YYYY-MM-DD — (next entry)

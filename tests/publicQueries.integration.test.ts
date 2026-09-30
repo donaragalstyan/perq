@@ -24,6 +24,8 @@ const FORBIDDEN_FIELDS = [
   "authProviderId",
   "university",
   "universityCountry",
+  "email",
+  "emailVerified",
 ];
 
 function assertNoPrivateFields(payload: unknown): void {

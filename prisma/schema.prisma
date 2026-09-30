@@ -93,7 +93,9 @@ enum TrustLevel {
 
 model User {
   id                String           @id @default(uuid()) @db.Uuid
-  authProviderId    String           @unique // Cognito subject; opaque. (Auth is a later spec.)
+  authProviderId    String           @unique // Cognito subject; opaque
+  email             String? // provider-asserted; private, never exposed publicly
+  emailVerified     Boolean          @default(false) // provider-asserted; gates community actions
   university        String? // private; never exposed via public APIs
   universityCountry String?          @db.Char(2) // ISO 3166-1 alpha-2; private
   trustLevel        TrustLevel       @default(NORMAL)
